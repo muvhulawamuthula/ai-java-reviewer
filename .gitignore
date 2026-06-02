@@ -1,0 +1,10 @@
+target/
+*.class
+review-report.md
+review.sarif
+review-comments.json
+changed.txt
+diff.patch
+.idea/
+*.iml
+.vscode/
