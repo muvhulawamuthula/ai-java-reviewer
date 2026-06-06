@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Java Reviewer</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #171a21; --border: #262b36; --text: #e6e9ef;
+    --muted: #9aa4b2; --accent: #6ea8fe; --accent-d: #4b82e0;
+    --crit: #ff5c5c; --high: #ff9f43; --med: #ffd166; --low: #6ea8fe; --info: #8b93a1;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  }
+  header {
+    padding: 18px 24px; border-bottom: 1px solid var(--border);
+    display: flex; align-items: baseline; gap: 12px;
+  }
+  header h1 { font-size: 18px; margin: 0; font-weight: 650; }
+  header .sub { color: var(--muted); font-size: 13px; }
+  .wrap { display: grid; grid-template-columns: 1fr 1fr; gap: 0; height: calc(100vh - 61px); }
+  @media (max-width: 900px) { .wrap { grid-template-columns: 1fr; height: auto; } }
+  .pane { display: flex; flex-direction: column; min-height: 0; }
+  .pane.left { border-right: 1px solid var(--border); }
+  .toolbar {
+    padding: 10px 16px; display: flex; gap: 10px; align-items: center;
+    border-bottom: 1px solid var(--border); flex-wrap: wrap;
+  }
+  input[type=text] {
+    background: var(--bg); border: 1px solid var(--border); color: var(--text);
+    border-radius: 6px; padding: 7px 10px; font-size: 13px; width: 200px;
+  }
+  textarea {
+    flex: 1; resize: none; border: none; outline: none; padding: 16px;
+    background: var(--panel); color: var(--text); min-height: 320px;
+    font: 13px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; tab-size: 4;
+  }
+  button {
+    background: var(--accent); color: #0a0d12; border: none; border-radius: 6px;
+    padding: 8px 16px; font-weight: 650; font-size: 14px; cursor: pointer;
+  }
+  button:hover { background: var(--accent-d); }
+  button:disabled { opacity: .55; cursor: default; }
+  button.ghost { background: transparent; color: var(--muted); border: 1px solid var(--border); }
+  .results { padding: 16px; overflow-y: auto; flex: 1; }
+  .summary {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+    padding: 12px 14px; color: var(--muted); margin-bottom: 14px; font-size: 14px;
+  }
+  .counts { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
+  .chip {
+    font-size: 12px; padding: 3px 9px; border-radius: 999px; border: 1px solid var(--border);
+    color: var(--muted);
+  }
+  .finding {
+    background: var(--panel); border: 1px solid var(--border); border-left-width: 4px;
+    border-radius: 8px; padding: 12px 14px; margin-bottom: 12px;
+  }
+  .finding h3 { margin: 0 0 6px; font-size: 15px; font-weight: 620; }
+  .finding .meta { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+  .tag { font-size: 11px; font-weight: 650; padding: 2px 8px; border-radius: 999px; letter-spacing: .02em; }
+  .sev-CRITICAL { color: var(--crit); } .bl-CRITICAL { border-left-color: var(--crit); }
+  .sev-HIGH { color: var(--high); }     .bl-HIGH { border-left-color: var(--high); }
+  .sev-MEDIUM { color: var(--med); }    .bl-MEDIUM { border-left-color: var(--med); }
+  .sev-LOW { color: var(--low); }       .bl-LOW { border-left-color: var(--low); }
+  .sev-INFO { color: var(--info); }     .bl-INFO { border-left-color: var(--info); }
+  .tag.bg { background: var(--border); color: var(--text); }
+  .finding p { margin: 6px 0; }
+  .finding .suggestion {
+    background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+    padding: 8px 10px; font-size: 13px; color: var(--text); margin-top: 8px;
+  }
+  .finding a { color: var(--accent); }
+  .line { color: var(--muted); font-size: 12px; }
+  .empty { color: var(--muted); text-align: center; margin-top: 60px; }
+  .err { color: var(--crit); background: rgba(255,92,92,.08); border: 1px solid var(--crit);
+         border-radius: 8px; padding: 12px 14px; }
+  .spin { display: inline-block; width: 14px; height: 14px; border: 2px solid var(--border);
+          border-top-color: var(--accent); border-radius: 50%; animation: spin .7s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<header>
+  <h1>AI Java Reviewer</h1>
+  <span class="sub">Paste a Java file, get security / anti-pattern / complexity / bug findings.</span>
+</header>
+<div class="wrap">
+  <div class="pane left">
+    <div class="toolbar">
+      <input type="text" id="filename" placeholder="Filename.java" value="PastedCode.java">
+      <button id="reviewBtn" onclick="review()">Review</button>
+      <button class="ghost" onclick="loadSample()">Load sample</button>
+      <button class="ghost" onclick="clearCode()">Clear</button>
+    </div>
+    <textarea id="code" spellcheck="false" placeholder="// Paste your Java code here..."></textarea>
+  </div>
+  <div class="pane">
+    <div class="results" id="results">
+      <div class="empty">Findings will appear here.</div>
+    </div>
+  </div>
+</div>
+<script>
+const SEV_ORDER = { CRITICAL: 0, HIGH: 1, MEDIUM: 2, LOW: 3, INFO: 4 };
+
+async function review() {
+  const code = document.getElementById('code').value;
+  const filename = document.getElementById('filename').value || 'PastedCode.java';
+  const results = document.getElementById('results');
+  const btn = document.getElementById('reviewBtn');
+  if (!code.trim()) { results.innerHTML = '<div class="err">Paste some Java code first.</div>'; return; }
+
+  btn.disabled = true;
+  results.innerHTML = '<div class="empty"><span class="spin"></span><br><br>Reviewing… this can take a few seconds.</div>';
+
+  try {
+    const res = await fetch('/api/review', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filename, code })
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) {
+      results.innerHTML = '<div class="err">' + escapeHtml(data.error || ('HTTP ' + res.status)) + '</div>';
+      return;
+    }
+    render(data);
+  } catch (e) {
+    results.innerHTML = '<div class="err">Request failed: ' + escapeHtml(e.message) + '</div>';
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function render(data) {
+  const results = document.getElementById('results');
+  const findings = (data.findings || []).slice().sort((a, b) =>
+    (SEV_ORDER[a.severity] ?? 9) - (SEV_ORDER[b.severity] ?? 9) ||
+    ((a.line || 1e9) - (b.line || 1e9)));
+
+  let html = '';
+  if (data.summary) html += '<div class="summary">' + escapeHtml(data.summary) + '</div>';
+
+  const counts = {};
+  findings.forEach(f => counts[f.severity] = (counts[f.severity] || 0) + 1);
+  html += '<div class="counts">';
+  html += '<span class="chip">' + findings.length + ' finding' + (findings.length === 1 ? '' : 's') + '</span>';
+  ['CRITICAL','HIGH','MEDIUM','LOW','INFO'].forEach(s => {
+    if (counts[s]) html += '<span class="chip sev-' + s + '">' + counts[s] + ' ' + s.toLowerCase() + '</span>';
+  });
+  if (data.suppressed) html += '<span class="chip">' + data.suppressed + ' suppressed</span>';
+  html += '</div>';
+
+  if (findings.length === 0) {
+    html += '<div class="empty">No findings above the confidence threshold. 🎉</div>';
+  } else {
+    findings.forEach(f => html += renderFinding(f));
+  }
+  results.innerHTML = html;
+}
+
+function renderFinding(f) {
+  const sev = f.severity || 'INFO';
+  const cat = labelCategory(f.category);
+  let cweLink = '';
+  if (f.cwe) {
+    const digits = (f.cwe.match(/\d+/) || [''])[0];
+    cweLink = digits
+      ? ' · <a href="https://cwe.mitre.org/data/definitions/' + digits + '.html" target="_blank" rel="noopener">' + escapeHtml(f.cwe) + '</a>'
+      : ' · ' + escapeHtml(f.cwe);
+  }
+  let h = '<div class="finding bl-' + sev + '">';
+  h += '<h3>' + escapeHtml(f.title || 'Finding') + '</h3>';
+  h += '<div class="meta">';
+  h += '<span class="tag sev-' + sev + '">' + sev + '</span>';
+  h += '<span class="tag bg">' + escapeHtml(cat) + '</span>';
+  h += '<span class="tag bg">' + escapeHtml(f.confidence || '') + ' confidence</span>';
+  if (f.line) h += '<span class="line">line ' + f.line + '</span>';
+  h += '</div>';
+  if (f.description) h += '<p>' + escapeHtml(f.description) + cweLink + '</p>';
+  if (f.suggestion) h += '<div class="suggestion"><strong>Fix:</strong> ' + escapeHtml(f.suggestion) + '</div>';
+  h += '</div>';
+  return h;
+}
+
+function labelCategory(c) {
+  return ({ SECURITY: 'Security', ANTI_PATTERN: 'Anti-pattern', COMPLEXITY: 'Complexity',
+            BUG: 'Bug', STYLE: 'Style' })[c] || (c || 'Style');
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+function clearCode() {
+  document.getElementById('code').value = '';
+  document.getElementById('results').innerHTML = '<div class="empty">Findings will appear here.</div>';
+}
+
+function loadSample() {
+  document.getElementById('filename').value = 'VulnerableService.java';
+  document.getElementById('code').value =
+`import java.sql.*;
+
+public class VulnerableService {
+    public User findUser(Connection conn, String name) throws SQLException {
+        // Builds SQL by concatenating user input.
+        String sql = "SELECT * FROM users WHERE name = '" + name + "'";
+        Statement st = conn.createStatement();
+        ResultSet rs = st.executeQuery(sql);
+        rs.next();
+        return new User(rs.getString("name"));
+    }
+
+    public String hash(String password) throws Exception {
+        java.security.MessageDigest md = java.security.MessageDigest.getInstance("MD5");
+        return new String(md.digest(password.getBytes()));
+    }
+}`;
+}
+
+// On load, warn if the server has no API key configured.
+fetch('/api/health').then(r => r.json()).then(h => {
+  if (!h.ready) {
+    document.getElementById('results').innerHTML =
+      '<div class="err">Server has no <code>ANTHROPIC_API_KEY</code> set. ' +
+      'Stop the server, export the key, and restart.</div>';
+  }
+}).catch(() => {});
+</script>
+</body>
+</html>
