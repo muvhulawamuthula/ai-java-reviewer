@@ -47,6 +47,10 @@ public final class Reviewer {
 
     public static void main(String[] args) {
         try {
+            if (isServeMode(args)) {
+                serve(args);
+                return; // serve() blocks; never returns normally
+            }
             System.exit(run(args));
         } catch (IllegalStateException e) {
             System.err.println("Configuration error: " + e.getMessage());
@@ -56,6 +60,47 @@ public final class Reviewer {
             e.printStackTrace();
             System.exit(2);
         }
+    }
+
+    /** True if the user asked for the web UI via {@code --serve} or {@code REVIEWER_SERVE=true}. */
+    private static boolean isServeMode(String[] args) {
+        for (String a : args) {
+            if ("--serve".equals(a) || "serve".equals(a)) return true;
+        }
+        return Boolean.parseBoolean(System.getenv().getOrDefault("REVIEWER_SERVE", "false"));
+    }
+
+    /** Starts the web UI and blocks forever. Port comes from {@code --port N}, {@code REVIEWER_PORT}, or 8080. */
+    private static void serve(String[] args) throws IOException {
+        int port = resolvePort(args);
+        new com.example.reviewer.web.WebServer(port).start();
+        // Keep the JVM alive; the HttpServer runs on daemon-ish pool threads.
+        try {
+            Thread.currentThread().join();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    private static int resolvePort(String[] args) {
+        for (int i = 0; i < args.length - 1; i++) {
+            if ("--port".equals(args[i])) {
+                try {
+                    return Integer.parseInt(args[i + 1].trim());
+                } catch (NumberFormatException ignored) {
+                    // fall through to env/default
+                }
+            }
+        }
+        String env = System.getenv("REVIEWER_PORT");
+        if (env != null && !env.isBlank()) {
+            try {
+                return Integer.parseInt(env.trim());
+            } catch (NumberFormatException ignored) {
+                // fall through to default
+            }
+        }
+        return 8080;
     }
 
     private static int run(String[] args) throws IOException {
