@@ -109,6 +109,28 @@ Run the test suite (no API key needed — the model isn't called):
 mvn test
 ```
 
+## Web UI (paste-and-review)
+
+Besides the CI/CLI mode, the same jar can serve a small browser front end where you paste a
+Java file and get the findings back interactively — handy for ad-hoc reviews outside a PR.
+
+```bash
+mvn -DskipTests package
+export ANTHROPIC_API_KEY=sk-ant-...
+java -jar target/ai-java-reviewer.jar --serve          # http://localhost:8080
+java -jar target/ai-java-reviewer.jar --serve --port 9000   # custom port
+```
+
+Then open <http://localhost:8080>, paste your code, and click **Review** (there's a *Load
+sample* button to try it instantly). The UI runs a **whole-file** review, so every finding
+at/above `REVIEWER_MIN_CONFIDENCE` is shown (the diff-scope filter only applies in CI).
+
+It's built on the JDK's built-in HTTP server — no extra dependencies, no separate frontend
+build. Endpoints: `GET /` (the page), `POST /api/review` (`{"filename","code"}` →
+`{"summary","findings"}`), `GET /api/health`. The page still loads without an API key; it
+just shows a notice that reviews are disabled until one is set. Serve mode can also be
+enabled with `REVIEWER_SERVE=true` / `REVIEWER_PORT`.
+
 ## Cost & performance notes
 
 - One API call per changed file, run `REVIEWER_CONCURRENCY` at a time. Cost scales with file
