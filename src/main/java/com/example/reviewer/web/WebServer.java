@@ -6,6 +6,7 @@ import com.example.reviewer.model.Finding;
 import com.example.reviewer.model.ReviewResult;
 import com.example.reviewer.report.ResponseParser;
 import com.example.reviewer.review.FindingFilter;
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.sun.net.httpserver.HttpExchange;
@@ -98,6 +99,7 @@ public final class WebServer {
             }
             byte[] body = in.readAllBytes();
             ex.getResponseHeaders().set("Content-Type", "text/html; charset=utf-8");
+            setSecurityHeaders(ex);
             ex.sendResponseHeaders(200, body.length);
             try (OutputStream os = ex.getResponseBody()) {
                 os.write(body);
@@ -150,7 +152,23 @@ public final class WebServer {
             out.put("suppressed", filtered.suppressed());
             out.set("findings", mapper.valueToTree(filtered.kept()));
             sendJson(ex, 200, mapper.writeValueAsString(out));
+        } catch (JsonProcessingException e) {
+            // Malformed request body or an unparseable model response: a client/data problem,
+            // not a server bug. Report it as a 400 without a stack trace.
+            sendJson(ex, 400, error("Could not parse JSON: " + e.getOriginalMessage()));
+        } catch (IOException e) {
+            // Reading the request body failed (e.g. the client went away).
+            sendJson(ex, 400, error("Could not read request: " + e.getMessage()));
+        } catch (RuntimeException e) {
+            // Unexpected: a bug (NPE, ClassCastException) or a model/transport failure. Log the
+            // full stack trace so it's diagnosable, then return a generic 500.
+            System.err.println("Unexpected error handling /api/review:");
+            e.printStackTrace();
+            sendJson(ex, 500, error("Review failed: " + e.getMessage()));
         } catch (Exception e) {
+            // ResponseParser.parse declares `throws Exception`; treat anything else as a 500.
+            System.err.println("Unexpected error handling /api/review:");
+            e.printStackTrace();
             sendJson(ex, 500, error("Review failed: " + e.getMessage()));
         }
     }
@@ -170,6 +188,7 @@ public final class WebServer {
     private static void sendJson(HttpExchange ex, int status, String body) throws IOException {
         byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
         ex.getResponseHeaders().set("Content-Type", "application/json; charset=utf-8");
+        setSecurityHeaders(ex);
         ex.sendResponseHeaders(status, bytes.length);
         try (OutputStream os = ex.getResponseBody()) {
             os.write(bytes);
@@ -179,9 +198,31 @@ public final class WebServer {
     private static void sendText(HttpExchange ex, int status, String body) throws IOException {
         byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
         ex.getResponseHeaders().set("Content-Type", "text/plain; charset=utf-8");
+        setSecurityHeaders(ex);
         ex.sendResponseHeaders(status, bytes.length);
         try (OutputStream os = ex.getResponseBody()) {
             os.write(bytes);
         }
+    }
+
+    /**
+     * Sets baseline hardening headers on every response: block MIME-sniffing, deny framing
+     * (clickjacking), and a CSP tight enough for this self-contained page. The page uses an
+     * inline &lt;style&gt; and &lt;script&gt;, so 'unsafe-inline' is required for those; everything else
+     * is locked to 'self' / 'none'.
+     */
+    private static void setSecurityHeaders(HttpExchange ex) {
+        var h = ex.getResponseHeaders();
+        h.set("X-Content-Type-Options", "nosniff");
+        h.set("X-Frame-Options", "DENY");
+        h.set("Referrer-Policy", "no-referrer");
+        h.set("Content-Security-Policy",
+                "default-src 'none'; "
+                        + "style-src 'self' 'unsafe-inline'; "
+                        + "script-src 'self' 'unsafe-inline'; "
+                        + "connect-src 'self'; "
+                        + "base-uri 'none'; "
+                        + "form-action 'none'; "
+                        + "frame-ancestors 'none'");
     }
 }
