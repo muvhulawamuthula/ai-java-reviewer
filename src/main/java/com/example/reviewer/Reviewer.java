@@ -87,8 +87,9 @@ public final class Reviewer {
             if ("--port".equals(args[i])) {
                 try {
                     return Integer.parseInt(args[i + 1].trim());
-                } catch (NumberFormatException ignored) {
-                    // fall through to env/default
+                } catch (NumberFormatException e) {
+                    System.err.printf("Ignoring invalid --port '%s'; trying REVIEWER_PORT then 8080.%n",
+                            args[i + 1]);
                 }
             }
         }
@@ -96,8 +97,8 @@ public final class Reviewer {
         if (env != null && !env.isBlank()) {
             try {
                 return Integer.parseInt(env.trim());
-            } catch (NumberFormatException ignored) {
-                // fall through to default
+            } catch (NumberFormatException e) {
+                System.err.printf("Ignoring invalid REVIEWER_PORT '%s'; defaulting to 8080.%n", env);
             }
         }
         return 8080;
