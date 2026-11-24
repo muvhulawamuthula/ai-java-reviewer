@@ -146,8 +146,6 @@ public final class Reviewer {
         return 0;
     }
 
-    // --- helpers -----------------------------------------------------------
-
     /** Reads and parses the unified diff at {@code REVIEWER_DIFF_FROM}, or an empty map. */
     private static Map<String, FileDiff> loadDiff() throws IOException {
         String diffFrom = System.getenv("REVIEWER_DIFF_FROM");
