@@ -1,175 +1,130 @@
 # AI Java Reviewer
 
-An AI-powered Java code reviewer built on **[langchain4j](https://docs.langchain4j.dev/)**
-and the **Anthropic (Claude) API**. It analyzes changed Java files for:
+[![Java 17](https://img.shields.io/badge/Java-17-orange?logo=openjdk)](https://openjdk.org/)
+[![langchain4j](https://img.shields.io/badge/langchain4j-1.13.1-blue)](https://docs.langchain4j.dev/)
+[![Claude](https://img.shields.io/badge/Claude-Anthropic-black)](https://www.anthropic.com/)
+[![License](https://img.shields.io/badge/license-see%20repo-lightgrey)](#)
 
-- **Security vulnerabilities** (injection, insecure deserialization, weak crypto, hardcoded secrets, XXE, …) — tagged with CWE ids where applicable
-- **Anti-patterns** (swallowed exceptions, God classes, resource leaks, mutable static state, …)
-- **Complexity** (high cyclomatic/cognitive complexity, long methods, deep nesting)
-- plus likely **bugs** and minor **style** notes
+AI-powered Java code review for pull requests. Built on **[langchain4j](https://docs.langchain4j.dev/)** and the **Anthropic Claude** API, packaged as a fat JAR that your GitHub Action builds and runs on every PR that touches `*.java`.
 
-It runs as a **GitHub Action** on pull requests and produces three things: a single,
-self-updating **summary comment**, **inline review comments** anchored to the changed
-lines, and a **SARIF** file so findings also show up in the repository's *Code scanning* tab.
+It finds security issues (with CWE tags where applicable), anti-patterns, complexity hotspots, likely bugs, and occasional style notes — then posts a sticky summary comment, inline review comments on changed lines, and a SARIF upload for the Code scanning tab.
 
-What makes it low-noise and cheap to run:
+> AI review complements human review and deterministic tools (SpotBugs, PMD, Semgrep, CodeQL). It can miss issues and raise false positives. Treat findings as suggestions.
 
-- **Diff-aware** — it sends the whole file for context but only flags issues on the lines
-  the PR actually changed, so it doesn't nag about pre-existing code.
-- **Confidence-scored** — every finding carries a HIGH/MEDIUM/LOW confidence, and you can
-  suppress anything below a threshold (`REVIEWER_MIN_CONFIDENCE`).
-- **Prompt-cached** — the review rubric is cached on Anthropic's side, so reviewing many
-  files in one PR doesn't re-send the instructions each time.
-- **Parallel** — files are reviewed concurrently (`REVIEWER_CONCURRENCY`).
+## Why this design
 
-> AI review is a complement to — not a replacement for — human review and
-> deterministic tools (SpotBugs, PMD, Semgrep, CodeQL). It can miss issues and
-> raise false positives. Treat findings as suggestions.
+| Trait | What it means in practice |
+|---|---|
+| **Diff-aware** | Full file for context; only findings on (or within ±2 lines of) PR-changed lines survive. |
+| **Confidence-scored** | Every finding is HIGH / MEDIUM / LOW; `REVIEWER_MIN_CONFIDENCE` drops the rest. |
+| **Prompt-cached** | The review rubric (`system-prompt.txt`) is cached via Anthropic `cacheSystemMessages`. |
+| **Parallel** | Files reviewed concurrently (`REVIEWER_CONCURRENCY`, default 4). |
+| **Fail-the-check** | Exit code 1 when surviving findings meet `REVIEWER_FAIL_ON` (default `HIGH`). |
 
----
+## Quick start
 
-## How it works
+1. Copy this project into your repo (or publish the JAR and call it from your own workflow).
+2. Add repository secret **`ANTHROPIC_API_KEY`**.
+3. Keep [`.github/workflows/code-review.yml`](.github/workflows/code-review.yml) — it triggers on PRs that change `*.java`.
 
-```
-PR opened/updated
-   │
-   ├─ git diff base..head → changed .java files + unified diff (diff.patch)
-   ├─ parse diff → changed line ranges per file (new-file coordinates)
-   ├─ for each file (in parallel) → Claude (langchain4j AiService, cached rubric) → JSON findings
-   ├─ filter → keep only findings on changed lines and at/above the confidence threshold
-   ├─ aggregate → review-report.md  +  review.sarif  +  review-comments.json
-   ├─ post/update sticky summary comment (review-report.md)
-   ├─ post inline review comments on the changed lines (review-comments.json)
-   └─ upload SARIF → Code scanning tab
-```
+SARIF upload needs code scanning (public repos, or private with GitHub Advanced Security). That step uses `continue-on-error`, so sticky + inline comments still work without it.
 
-The model is asked to return strict JSON; the app parses it into typed `Finding` objects,
-applies the diff-scope + confidence filter, renders the three reports, and exits non-zero
-when any surviving finding meets the configured severity threshold (so the check can block
-merges). If no diff is supplied it falls back to reviewing whole files.
+**Full setup, configuration, local CLI, and web UI:** [docs/usage.md](docs/usage.md)  
+**Pipeline, components, and data flow:** [docs/architecture.md](docs/architecture.md)
 
-## Setup
+## Outputs
 
-1. Copy this project into your repo (or publish the jar and call it from your own workflow).
-2. Add your Anthropic key as a repository secret named **`ANTHROPIC_API_KEY`**
-   (Settings → Secrets and variables → Actions → New repository secret).
-3. Commit `.github/workflows/code-review.yml`. Done — it triggers on PRs that touch `*.java`.
+On each qualifying PR the Action produces:
 
-That's it. Inline SARIF annotations require code scanning to be available
-(public repos, or private repos with GitHub Advanced Security); the upload step
-is marked `continue-on-error`, so the comment still works without it.
+1. **Sticky summary** — `review-report.md` via `marocchino/sticky-pull-request-comment` (header `ai-java-reviewer`).
+2. **Inline comments** — `review-comments.json` posted through `actions/github-script`, deduped by fingerprint markers (`<!-- ai-reviewer:fp=… -->`).
+3. **SARIF** — `review.sarif` uploaded with category `ai-java-reviewer` (fingerprints, CWE help URIs, `security-severity`).
 
-## Configuration
+## Configuration (summary)
 
-All configuration is via environment variables (set them in the workflow's `env:`):
+All knobs are environment variables (set under the workflow `env:` block):
 
-| Variable | Default | Description |
+| Variable | Default | Role |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | *(required)* | Your Anthropic API key. |
-| `REVIEWER_MODEL` | `claude-sonnet-4-6` | Claude model id. Use a Haiku model for cheaper/faster reviews, or `claude-opus-4-8` for the most thorough. |
-| `REVIEWER_FAIL_ON` | `HIGH` | Minimum severity that fails the check: `CRITICAL`, `HIGH`, `MEDIUM`, `LOW`, `INFO`. |
-| `REVIEWER_MIN_CONFIDENCE` | `LOW` | Drop findings below this confidence: `HIGH`, `MEDIUM`, `LOW`. Set `MEDIUM` to cut false positives. |
-| `REVIEWER_CONCURRENCY` | `4` | How many files to review in parallel. |
-| `REVIEWER_MAX_TOKENS` | `8000` | Max output tokens per file. |
-| `REVIEWER_TIMEOUT_SECONDS` | `120` | Per-request timeout. |
-| `REVIEWER_DIFF_FROM` | *(unset)* | Path to a unified diff (e.g. `git diff`). Enables diff-aware mode; files to review are derived from it. |
-| `REVIEWER_FILES_FROM` | *(unset)* | Path to a newline-separated list of files to review (whole-file mode). |
-| `REVIEWER_OUTPUT_MD` | `review-report.md` | Markdown summary report path. |
-| `REVIEWER_OUTPUT_SARIF` | `review.sarif` | SARIF output path. |
-| `REVIEWER_OUTPUT_COMMENTS` | `review-comments.json` | Inline-review-comments payload path. |
-| `REVIEWER_VERBOSE` | `false` | Log raw requests/responses (debugging). |
+| `ANTHROPIC_API_KEY` | *(required)* | Anthropic API key |
+| `REVIEWER_MODEL` | `claude-sonnet-4-6` | Claude model id |
+| `REVIEWER_FAIL_ON` | `HIGH` | Min severity that fails the job |
+| `REVIEWER_MIN_CONFIDENCE` | `LOW` | Drop findings below this confidence |
+| `REVIEWER_CONCURRENCY` | `4` | Parallel file reviews |
+| `REVIEWER_MAX_TOKENS` | `8000` | Max output tokens per file |
+| `REVIEWER_TIMEOUT_SECONDS` | `120` | Per-request timeout |
+| `REVIEWER_DIFF_FROM` | *(unset)* | Unified diff path → diff-aware mode |
+| `REVIEWER_FILES_FROM` | *(unset)* | Newline-separated file list |
+| `REVIEWER_OUTPUT_MD` / `_SARIF` / `_COMMENTS` | `review-report.md` / `review.sarif` / `review-comments.json` | Report paths |
+| `REVIEWER_VERBOSE` | `false` | Log raw model I/O |
+| `REVIEWER_SERVE` / `REVIEWER_PORT` | `false` / `8080` | Web UI mode |
 
-You can also pass file paths directly as CLI arguments. Inputs combine: CLI args,
-`REVIEWER_FILES_FROM`, and the files named in `REVIEWER_DIFF_FROM` are all reviewed.
-When a diff is supplied the review is diff-aware; otherwise files are reviewed whole.
+See [docs/usage.md](docs/usage.md) for CLI args, exit codes, and local recipes.
 
-## Run locally
+## Run locally (CLI)
 
 ```bash
 mvn -DskipTests package
-
 export ANTHROPIC_API_KEY=sk-ant-...
-java -jar target/ai-java-reviewer.jar src/main/java/com/acme/PaymentService.java
+java -jar target/ai-java-reviewer.jar path/to/File.java
 
-# review-report.md and review.sarif are written to the working directory
-cat review-report.md
-```
-
-To run a diff-aware review of everything changed against `main` (only changed lines flagged):
-
-```bash
+# Diff-aware against main
 git diff --diff-filter=ACMR main...HEAD -- '*.java' > diff.patch
 REVIEWER_DIFF_FROM=diff.patch java -jar target/ai-java-reviewer.jar
-# writes review-report.md, review.sarif, review-comments.json
+
+mvn test   # no API key required
 ```
 
-Run the test suite (no API key needed — the model isn't called):
+## Web UI
 
 ```bash
-mvn test
-```
-
-## Web UI (paste-and-review)
-
-Besides the CI/CLI mode, the same jar can serve a small browser front end where you paste a
-Java file and get the findings back interactively — handy for ad-hoc reviews outside a PR.
-
-```bash
-mvn -DskipTests package
-export ANTHROPIC_API_KEY=sk-ant-...
 java -jar target/ai-java-reviewer.jar --serve          # http://localhost:8080
-java -jar target/ai-java-reviewer.jar --serve --port 9000   # custom port
+java -jar target/ai-java-reviewer.jar --serve --port 9000
+# or: ./run-reviewer.sh   # loads key from libsecret keyring
 ```
 
-Then open <http://localhost:8080>, paste your code, and click **Review** (there's a *Load
-sample* button to try it instantly). The UI runs a **whole-file** review, so every finding
-at/above `REVIEWER_MIN_CONFIDENCE` is shown (the diff-scope filter only applies in CI).
-
-It's built on the JDK's built-in HTTP server — no extra dependencies, no separate frontend
-build. Endpoints: `GET /` (the page), `POST /api/review` (`{"filename","code"}` →
-`{"summary","findings"}`), `GET /api/health`. The page still loads without an API key; it
-just shows a notice that reviews are disabled until one is set. Serve mode can also be
-enabled with `REVIEWER_SERVE=true` / `REVIEWER_PORT`.
-
-## Cost & performance notes
-
-- One API call per changed file, run `REVIEWER_CONCURRENCY` at a time. Cost scales with file
-  size and the number of changed files.
-- The system prompt (review rubric) is cached on Anthropic's side (`cacheSystemMessages`), so
-  the per-file input cost after the first file is just the file itself.
-- Files over ~120 KB are skipped (raise `MAX_FILE_BYTES` in `ReviewEngine.java` if needed).
-- For large PRs, consider Haiku, or only reviewing files under certain paths
-  (tighten the `paths:` filter in the workflow).
-- `temperature` is fixed at `0.0` for stable, repeatable reviews.
+Paste-and-review is **whole-file** (diff filter only applies in CI). Endpoints: `GET /`, `POST /api/review`, `GET /api/health`.
 
 ## Project layout
 
 ```
 src/main/java/com/example/reviewer/
-  Reviewer.java               # thin CLI entry point: loads config + diff, writes reports
-  ai/CodeReviewAssistant.java # langchain4j AiService interface (user message)
-  ai/ReviewerFactory.java     # builds the Claude model (+ prompt caching) + AiService + config
-  diff/DiffParser.java        # unified diff → changed line ranges per file
-  diff/FileDiff.java          # changed lines for one file (ranges, slack matching)
-  review/ReviewEngine.java    # parallel per-file review loop
-  review/FindingFilter.java   # pure diff-scope + confidence filtering (heavily unit-tested)
-  model/                      # Finding, ReviewResult, Severity, Confidence, Category
-  report/ResponseParser.java  # parses the model's JSON (fence-tolerant)
-  report/MarkdownReporter.java
-  report/SarifReporter.java          # enriched: fingerprints, CWE helpUri, security-severity
-  report/ReviewCommentsReporter.java # inline PR review-comment payload
-src/main/resources/system-prompt.txt # the review rubric + JSON contract
-src/test/java/...                     # JUnit 5 suite
-.github/workflows/code-review.yml     # the GitHub Action
+  Reviewer.java                 # CLI / --serve entry; loads config + diff; writes reports
+  ai/CodeReviewAssistant.java   # langchain4j AiService (user message template)
+  ai/ReviewerFactory.java       # Claude model + prompt caching + Config.fromEnv()
+  diff/DiffParser.java          # unified diff → changed lines (new-file coords)
+  diff/FileDiff.java            # ranges + slack matching
+  review/ReviewEngine.java      # parallel per-file review loop
+  review/FindingFilter.java     # confidence + diff-scope gates (pure, unit-tested)
+  model/                        # Finding, ReviewResult, Severity, Confidence, Category
+  report/                       # ResponseParser, Markdown / SARIF / ReviewComments reporters
+  web/WebServer.java            # JDK HttpServer UI
+src/main/resources/system-prompt.txt   # review rubric + JSON contract
+.github/workflows/code-review.yml      # GitHub Action
+docs/                           # architecture + usage guides
 ```
+
+## Cost & limits
+
+- One API call per changed file; concurrency bounded by `REVIEWER_CONCURRENCY`.
+- Files over **120 KB** are skipped (`MAX_FILE_BYTES` in `ReviewEngine`).
+- Temperature is fixed at **0.0** for stable reviews.
+- Prefer Haiku or tighter `paths:` filters for large PRs.
 
 ## Extending
 
-- **Tune the rubric**: edit `system-prompt.txt` (categories, severity/confidence guidance, JSON shape).
-- **Add a category**: add to the `Category` enum and mention it in the prompt.
-- **Tune the scope filter**: `review/FindingFilter.java` decides what survives (changed-line
-  slack, how unlocalized findings are handled, confidence threshold) — it's a pure function
-  with full unit coverage, so it's safe to adjust.
-- **Send only the diff hunks** (cheaper, less context): pass the patch instead of full file
-  contents in `CodeReviewAssistant#review`.
-- **Different sink**: swap the sticky-comment / inline-comment steps for `gh pr comment`, Slack, etc.
+- Tune the rubric in `system-prompt.txt`.
+- Add a `Category` enum value and mention it in the prompt.
+- Adjust scope in `FindingFilter` (slack, unlocalized HIGH+ keep rule).
+- Swap sticky/inline steps for Slack or other sinks.
+
+## Documentation
+
+| Doc | Contents |
+|---|---|
+| [docs/usage.md](docs/usage.md) | Action setup, env vars, CLI, web UI, troubleshooting |
+| [docs/architecture.md](docs/architecture.md) | End-to-end pipeline, modules, filtering, Action steps |
+
+## License
+
+See the repository for license terms.
