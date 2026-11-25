@@ -80,8 +80,6 @@ public final class WebServer {
         }
     }
 
-    // --- handlers ----------------------------------------------------------
-
     private void serveIndex(HttpExchange ex) throws IOException {
         if (!"GET".equalsIgnoreCase(ex.getRequestMethod())) {
             sendText(ex, 405, "Method Not Allowed");
@@ -172,8 +170,6 @@ public final class WebServer {
             sendJson(ex, 500, error("Review failed: " + e.getMessage()));
         }
     }
-
-    // --- helpers -----------------------------------------------------------
 
     private String error(String message) {
         try {

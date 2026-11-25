@@ -173,3 +173,7 @@ src/test/java/...                     # JUnit 5 suite
 - **Send only the diff hunks** (cheaper, less context): pass the patch instead of full file
   contents in `CodeReviewAssistant#review`.
 - **Different sink**: swap the sticky-comment / inline-comment steps for `gh pr comment`, Slack, etc.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
